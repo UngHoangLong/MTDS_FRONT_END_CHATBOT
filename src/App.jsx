@@ -4,6 +4,10 @@ import { Trash2, FileText, Send, Bot, User, Info, Loader2, Paperclip } from 'luc
 import { v4 as uuidv4 } from 'uuid';
 // Import Logo của công ty
 import mtdsLogo from './assets/logo_MTDS.png';
+// Import avatar cho bot
+import botAvatar from './assets/nova_software.jpg';
+// Import component WorkflowDiagram
+import WorkflowDiagram from './components/WorkflowDiagram';
 
 // Import thư viện để xử lý Markdown
 import ReactMarkdown from 'react-markdown';
@@ -31,6 +35,9 @@ function App() {
   const [inputMsg, setInputMsg] = useState("");
   const [isChatting, setIsChatting] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [showWorkflow, setShowWorkflow] = useState(false); // State cho workflow modal
   
   // Ref để tự động cuộn xuống tin nhắn mới nhất
   const messagesEndRef = useRef(null);
@@ -47,6 +54,7 @@ function App() {
     }
     setSessionId(currentSession);
     fetchDocuments();
+    fetchSuggestions(); // Lấy câu hỏi gợi ý
   }, []);
 
   // Tự động cuộn xuống cuối khi có tin nhắn mới
@@ -73,6 +81,20 @@ function App() {
   };
 
   // --- CÁC HÀM GỌI API ---
+
+  // Lấy câu hỏi gợi ý
+  const fetchSuggestions = async () => {
+    setIsLoadingSuggestions(true);
+    try {
+      const res = await axios.get(`${API_URL}/suggestions?n=6`);
+      setSuggestions(res.data.suggestions || []);
+    } catch (error) {
+      console.error("Lỗi lấy suggestions:", error);
+      setSuggestions([]);
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
 
   // Lấy danh sách tài liệu
   const fetchDocuments = async () => {
@@ -146,37 +168,107 @@ function App() {
     }
   }
 
-  // Gửi tin nhắn Chat
-  const handleSendMessage = async () => {
-    if (!inputMsg.trim()) return;
+  // Gửi tin nhắn Chat với Streaming
+  const handleSendMessage = async (messageText) => {
+    const userQuery = messageText || inputMsg;
+    if (!userQuery.trim()) return;
 
-    const userQuery = inputMsg;
     // Hiển thị tin nhắn User ngay lập tức
     setMessages(prev => [...prev, { role: 'user', content: userQuery }]);
     setInputMsg("");
     setIsChatting(true);
 
     try {
-      // Gọi API Chat
-      const res = await axios.post(`${API_URL}/chat/message`, {
-        user_query: userQuery,
-        session_id: sessionId
+      // Gọi API Streaming
+      const response = await fetch(`${API_URL}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
+        },
+        body: JSON.stringify({
+          user_query: userQuery,
+          session_id: sessionId
+        })
       });
 
-      // Hiển thị tin nhắn AI trả về
-      const aiResponse = res.data;
-      setMessages(prev => [...prev, { 
-        role: 'ai', 
-        content: aiResponse.answer,
-        mode: aiResponse.mode, // 'search' hoặc 'direct'
-        reason: aiResponse.reason
-      }]);
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+      let aiMode = 'direct';
+      let aiReason = null;
+      let hasAddedMessage = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonData = JSON.parse(line.slice(6));
+              
+              if (jsonData.type === 'metadata') {
+                aiMode = jsonData.content.mode || 'direct';
+                aiReason = jsonData.content.reason || null;
+              } else if (jsonData.type === 'token') {
+                accumulatedContent += jsonData.content;
+                
+                // Chỉ thêm message AI khi có token đầu tiên
+                if (!hasAddedMessage) {
+                  setMessages(prev => [...prev, {
+                    role: 'ai',
+                    content: accumulatedContent,
+                    mode: aiMode,
+                    reason: aiReason
+                  }]);
+                  hasAddedMessage = true;
+                } else {
+                  // Cập nhật message cuối cùng - React batch updates tự động
+                  setMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1] = {
+                      ...newMessages[newMessages.length - 1],
+                      content: accumulatedContent
+                    };
+                    return newMessages;
+                  });
+                }
+              } else if (jsonData.type === 'end') {
+                // Stream hoàn tất
+                console.log('Stream completed');
+              } else if (jsonData.type === 'error') {
+                throw new Error(jsonData.content);
+              }
+            } catch (parseError) {
+              console.error('Error parsing SSE data:', parseError);
+            }
+          }
+        }
+      }
 
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'ai', content: "Xin lỗi, hệ thống đang bận hoặc mất kết nối với Server." }]);
+      console.error('Streaming error:', error);
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        content: "Xin lỗi, hệ thống đang bận hoặc mất kết nối với Server."
+      }]);
     } finally {
       setIsChatting(false);
     }
+  };
+
+  // Click vào suggestion để gửi câu hỏi
+  const handleSuggestionClick = (question) => {
+    setInputMsg(question);
+    handleSendMessage(question);
   };
 
   return (
@@ -326,7 +418,15 @@ function App() {
               </div>
             </div>
           </div>
-          <div className="text-xs text-gray-400">Session: {sessionId.slice(0,8)}...</div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowWorkflow(true)}
+              className="text-xs text-blue-600 hover:text-blue-700 font-semibold px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors flex items-center gap-1.5"
+            >
+              Xem luồng xử lý
+            </button>
+            <div className="text-xs text-gray-400">Session: {sessionId.slice(0,8)}...</div>
+          </div>
         </div>
 
         {/* Danh sách tin nhắn */}
@@ -336,8 +436,8 @@ function App() {
               <div className={`max-w-[70%] flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                 
                 {/* Avatar */}
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-lg ${msg.role === 'user' ? 'bg-gray-600' : 'bg-blue-500'}`}> 
-                  {msg.role === 'user' ? <User size={20} className="text-white"/> : <Bot size={20} className="text-white"/>}
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-lg overflow-hidden ${msg.role === 'user' ? 'bg-gray-600' : 'bg-white'}`}> 
+                  {msg.role === 'user' ? <User size={20} className="text-white"/> : <img src={botAvatar} alt="Bot" className="w-full h-full object-cover" />}
                 </div>
 
                 {/* Bong bóng chat */}
@@ -350,22 +450,6 @@ function App() {
                   <div className={`prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0.5 ${msg.role === 'ai' ? 'prose-invert' : 'prose-light text-white'}`}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                   </div>
-                  
-                  {/* Metadata cho AI response */}
-                  {msg.role === 'ai' && msg.mode && (
-                    <div className={`mt-3 pt-2 border-t flex flex-wrap gap-2 items-center border-blue-300/30`}>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider shadow-sm ${
-                        msg.mode === 'search' ? 'bg-amber-400 text-amber-900' : 'bg-gray-700 text-gray-100'
-                      }`}>
-                        {msg.mode === 'search' ? 'RAG Search' : 'Direct'}
-                      </span>
-                      {msg.reason && (
-                        <span className={`text-[10px] italic opacity-90 text-blue-100`} title={msg.reason}>
-                          Logic: {msg.reason}
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -374,13 +458,60 @@ function App() {
           {/* Loading Indicator */}
           {isChatting && (
             <div className="flex justify-start gap-3">
-              <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center shadow-md"><Bot size={20} className="text-white"/></div>
+              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-md overflow-hidden"><img src={botAvatar} alt="Bot" className="w-full h-full object-cover" /></div>
               <div className="bg-gray-700 p-4 rounded-xl shadow-sm flex items-center gap-2"> 
                 <Loader2 className="animate-spin text-blue-400" size={18}/>
-                <span className="text-sm text-gray-200 font-medium">AI đang suy nghĩ...</span>
+                <span className="text-sm text-gray-200 font-medium">Xin chờ trong giây lát...</span>
               </div>
             </div>
           )}
+
+          {/* Hiển thị Suggestions nếu chưa có tin nhắn từ user */}
+          {messages.filter(m => m.role === 'user').length === 0 && (
+            <div className="max-w-3xl mx-auto mt-8">
+              <h3 className="text-gray-400 text-sm font-semibold mb-4 text-center">
+                💡 Câu hỏi gợi ý
+              </h3>
+              
+              {isLoadingSuggestions ? (
+                <div className="flex justify-center items-center gap-2 text-gray-500">
+                  <Loader2 className="animate-spin" size={20}/>
+                  <span className="text-sm">Đang tải gợi ý...</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {suggestions.map((sug, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => handleSuggestionClick(sug.question)}
+                      disabled={isChatting}
+                      className="p-4 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-blue-500 rounded-xl text-left transition-all duration-200 group disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center shrink-0 group-hover:bg-blue-500/30 transition">
+                          <span className="text-blue-400 text-lg">💬</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm font-medium mb-1 group-hover:text-blue-300 transition">
+                            {sug.question}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="px-2 py-0.5 bg-blue-900/40 text-blue-300 rounded">
+                              {sug.category}
+                            </span>
+                            <span className="text-gray-500 truncate">
+                              {sug.source}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
@@ -405,10 +536,13 @@ function App() {
             </button>
           </div>
           <div className="text-center mt-3 text-xs text-gray-500">
-            Powered by GPT-4o & Vector Search Technology
+            Được phát triển bởi MTDS AI Team
           </div>
         </div>
       </div>
+
+      {/* Workflow Diagram Modal */}
+      <WorkflowDiagram isOpen={showWorkflow} onClose={() => setShowWorkflow(false)} />
     </div>
   );
 }
