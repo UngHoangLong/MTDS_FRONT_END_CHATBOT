@@ -444,10 +444,14 @@ function App() {
                 <div className={`p-4 rounded-xl shadow-lg text-[15px] leading-relaxed ${
                   msg.role === 'user' 
                     ? 'bg-gray-700 text-white rounded-br-none ring-1 ring-gray-600' 
-                    : 'bg-blue-500 text-white rounded-bl-none shadow-blue-400/20' 
+                    : 'bg-blue-900 text-white rounded-bl-none shadow-blue-900/30' 
                 } `}>
                   {/* Sử dụng ReactMarkdown để xử lý ký hiệu ** */}
-                  <div className={`prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0.5 ${msg.role === 'ai' ? 'prose-invert' : 'prose-light text-white'}`}>
+                  <div className={`prose prose-sm max-w-none ${
+                    msg.role === 'ai' 
+                      ? 'prose-invert prose-p:my-2 prose-p:leading-relaxed prose-p:text-white prose-ul:my-2 prose-li:my-1 prose-li:text-white prose-strong:text-yellow-300 prose-strong:font-bold prose-em:text-blue-200 prose-code:text-pink-300 prose-code:bg-blue-600/30 prose-code:px-1 prose-code:rounded' 
+                      : 'prose-light text-white prose-p:my-2 prose-p:text-white prose-ul:my-2 prose-li:my-1 prose-li:text-white prose-strong:text-yellow-200 prose-strong:font-bold'
+                  }`}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                   </div>
                 </div>
