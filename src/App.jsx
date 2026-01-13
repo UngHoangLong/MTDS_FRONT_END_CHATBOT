@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Trash2, FileText, Send, Bot, User, Info, Loader2, Paperclip } from 'lucide-react';
+import { Trash2, FileText, Send, Bot, User, Info, Loader2, Paperclip, LogIn } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 // Import Logo của công ty
 import mtdsLogo from './assets/logo_MTDS.png';
@@ -8,6 +8,8 @@ import mtdsLogo from './assets/logo_MTDS.png';
 import botAvatar from './assets/nova_software.jpg';
 // Import component WorkflowDiagram
 import WorkflowDiagram from './components/WorkflowDiagram';
+import LoginPage from './components/LoginPage';
+import AdminDashboard from './components/AdminDashboard';
 
 // Import thư viện để xử lý Markdown
 import ReactMarkdown from 'react-markdown';
@@ -18,6 +20,11 @@ const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 axios.defaults.headers.common['ngrok-skip-browser-warning'] = 'true';
 
 function App() {
+  // --- STATE AUTH ---
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken'));
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showAdminDashboard, setShowAdminDashboard] = useState(false);
+
   // --- STATE QUẢN LÝ TÀI LIỆU ---
   const [documents, setDocuments] = useState([]);
   const [uploadFile, setUploadFile] = useState(null);
@@ -25,12 +32,12 @@ function App() {
   const [summary, setSummary] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(0); // <-- ĐÃ THÊM: Theo dõi tiến trình upload
-  const [isProcessingDocId, setIsProcessingDocId] = useState(null); // <-- ĐÃ THÊM: Theo dõi tiến trình Xóa/Xem
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isProcessingDocId, setIsProcessingDocId] = useState(null);
 
   // --- STATE QUẢN LÝ CHAT ---
   const [messages, setMessages] = useState([
-    { role: 'ai', content: 'Xin chào! Tôi là trợ lý ảo AI của MTDS. Hãy upload tài liệu bên trái và hỏi tôi bất cứ điều gì.', mode: 'direct' }
+    { role: 'ai', content: 'Xin chào! Tôi là trợ lý ảo AI của MTDS. Hãy hỏi tôi bất cứ điều gì về phần mềm Nova.', mode: 'direct' }
   ]);
   const [inputMsg, setInputMsg] = useState("");
   const [isChatting, setIsChatting] = useState(false);
@@ -53,9 +60,17 @@ function App() {
       sessionStorage.setItem("chat_session_id", currentSession);
     }
     setSessionId(currentSession);
-    fetchDocuments();
     fetchSuggestions(); // Lấy câu hỏi gợi ý
   }, []);
+
+  // 2. Gọi fetchDocuments khi authToken thay đổi
+  useEffect(() => {
+    if (authToken) {
+      fetchDocuments();
+    } else {
+      setDocuments([]);
+    }
+  }, [authToken]);
 
   // Tự động cuộn xuống cuối khi có tin nhắn mới
   useEffect(() => {
@@ -98,8 +113,18 @@ function App() {
 
   // Lấy danh sách tài liệu
   const fetchDocuments = async () => {
+    // Chỉ gọi API nếu đã đăng nhập (có token)
+    if (!authToken) {
+      setDocuments([]);
+      return;
+    }
+
     try {
-      const res = await axios.get(`${API_URL}/documents/`);
+      const res = await axios.get(`${API_URL}/documents/`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
       setDocuments(res.data.documents || []);
     } catch (error) {
       console.error("Lỗi kết nối Backend:", error);
@@ -110,6 +135,13 @@ function App() {
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!uploadFile) return alert("Vui lòng chọn file PDF!");
+    
+    // Check auth token
+    if (!authToken) {
+      alert("Bạn cần đăng nhập với tài khoản Admin để tải lên tài liệu!");
+      setShowLoginModal(true);
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", uploadFile);
@@ -117,19 +149,22 @@ function App() {
     formData.append("summary", summary);
 
     setIsUploading(true);
-    setUploadProgress(0); // Reset progress
+    setUploadProgress(0);
 
     try {
       await axios.post(`${API_URL}/documents/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => { // <-- Thêm theo dõi tiến trình
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        },
+        onUploadProgress: (progressEvent) => {
             const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             setUploadProgress(percentCompleted);
         }
       });
       alert("Upload thành công! Hệ thống đang xử lý dữ liệu...");
-      setUploadFile(null); setTitle(""); setSummary(""); // Reset form
-      fetchDocuments(); // Load lại danh sách
+      setUploadFile(null); setTitle(""); setSummary("");
+      fetchDocuments();
     } catch (error) {
       alert("Lỗi upload: " + (error.response?.data?.detail || error.message));
     } finally {
@@ -271,10 +306,45 @@ function App() {
     handleSendMessage(question);
   };
 
+  // Handle login success
+  const handleLoginSuccess = (data) => {
+    setAuthToken(data.access_token);
+    localStorage.setItem('authToken', data.access_token);
+    localStorage.setItem('adminId', data.admin_id);
+    localStorage.setItem('adminUsername', data.username);
+    setShowLoginModal(false);
+    setShowAdminDashboard(true);
+  };
+
+  // Quay lại chat (giữ token, chỉ ẩn dashboard)
+  const handleBackToChat = () => {
+    setShowAdminDashboard(false);
+  };
+
+  // Logout hoàn toàn (xóa token)
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('adminId');
+    localStorage.removeItem('adminUsername');
+    setAuthToken(null);
+    setShowAdminDashboard(false);
+  };
+
+  // Nếu admin đang xem dashboard, show admin dashboard thay vì chat
+  if (authToken && showAdminDashboard) {
+    return <AdminDashboard onBack={handleBackToChat} onLogout={handleLogout} authToken={authToken} />;
+  }
+
+  // Nếu click button Admin Login, show login page
+  if (showLoginModal) {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} onCancel={() => setShowLoginModal(false)} />;
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 font-sans text-gray-800">
       
-      {/* --- CỘT TRÁI: QUẢN LÝ TÀI LIỆU --- */}
+      {/* --- CỘT TRÁI: QUẢN LÝ TÀI LIỆU (CHỈ HIỂN THỊ KHI ADMIN) --- */}
+      {authToken && (
       <div className="w-80 bg-white border-r border-gray-200 flex flex-col shadow-xl z-20">
         
         {/* HEADER CỘT TRÁI: Chỉ hiển thị Logo MTDS */}
@@ -398,6 +468,7 @@ function App() {
           </div>
         )}
       </div>
+      )}
 
       {/* --- CỘT PHẢI: KHUNG CHAT (NỀN XÁM TỐI HƠN/NGẢ ĐEN) --- */}
       <div className="flex-1 flex flex-col bg-gray-900 relative"> 
@@ -419,12 +490,32 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowWorkflow(true)}
-              className="text-xs text-blue-600 hover:text-blue-700 font-semibold px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors flex items-center gap-1.5"
-            >
-              Xem luồng xử lý
-            </button>
+            {authToken && (
+              <>
+                <button
+                  onClick={() => setShowAdminDashboard(true)}
+                  className="text-xs text-white bg-green-600 hover:bg-green-700 font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  <LogIn size={14} />
+                  Quản Lý Tài Liệu
+                </button>
+                <button
+                  onClick={() => setShowWorkflow(true)}
+                  className="text-xs text-blue-600 hover:text-blue-700 font-semibold px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors flex items-center gap-1.5"
+                >
+                  Xem luồng xử lý
+                </button>
+              </>
+            )}
+            {!authToken && (
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="text-xs text-white bg-blue-600 hover:bg-blue-700 font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <LogIn size={14} />
+                Admin Login
+              </button>
+            )}
             <div className="text-xs text-gray-400">Session: {sessionId.slice(0,8)}...</div>
           </div>
         </div>
