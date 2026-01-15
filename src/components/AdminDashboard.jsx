@@ -1,4 +1,4 @@
-// Tạo giao diện admin
+// Tạo giao diện admin và các chức năng liên quan
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Trash2, Upload, LogOut, Loader2, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
