@@ -1,7 +1,7 @@
 // Tạo giao diện admin, các chức năng liên quan khác
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Trash2, Upload, LogOut, Loader2, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Trash2, Upload, LogOut, Loader2, AlertCircle, CheckCircle, ArrowLeft, Edit, X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -10,11 +10,28 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
   const [isLoading, setIsLoading] = useState(true);
   const [uploadFile, setUploadFile] = useState(null);
   const [title, setTitle] = useState("");
-  const [summary, setSummary] = useState("");
+  
+  // State cho các trường mô tả mới
+  const [docPurpose, setDocPurpose] = useState("");
+  const [docType, setDocType] = useState("");
+  const [docModules, setDocModules] = useState("");
+  const [docFunctions, setDocFunctions] = useState("");
+  const [docFunctionDetails, setDocFunctionDetails] = useState("");
+
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [deletingDocId, setDeletingDocId] = useState(null);
   const [message, setMessage] = useState({ type: '', content: '' });
+
+  // State cho modal cập nhật
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingDoc, setEditingDoc] = useState(null);
+  const [editDocPurpose, setEditDocPurpose] = useState("");
+  const [editDocType, setEditDocType] = useState("");
+  const [editDocModules, setEditDocModules] = useState("");
+  const [editDocFunctions, setEditDocFunctions] = useState("");
+  const [editDocFunctionDetails, setEditDocFunctionDetails] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
 
   // Load documents khi component mount hoặc khi authToken thay đổi
   useEffect(() => {
@@ -62,7 +79,17 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
     const formData = new FormData();
     formData.append('file', uploadFile);
     formData.append('title', title);
-    formData.append('summary', summary || 'Không có mô tả');
+    
+    // Kết hợp các trường thành một summary có cấu trúc
+    const summaryParts = [];
+    if (docType) summaryParts.push(`Tài liệu này nói về gì: ${docType}`);
+    if (docPurpose) summaryParts.push(`Mục đích tài liệu: ${docPurpose}`);
+    if (docModules) summaryParts.push(`Module/Phân hệ chính: ${docModules}`);
+    if (docFunctions) summaryParts.push(`Các chức năng chính: ${docFunctions}`);
+    if (docFunctionDetails) summaryParts.push(`Chi tiết chức năng: ${docFunctionDetails}`);
+    
+    const combinedSummary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Không có mô tả';
+    formData.append('summary', combinedSummary);
 
     try {
       await axios.post(`${API_URL}/documents/upload`, formData, {
@@ -77,9 +104,14 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
       });
 
       showMessage('success', 'Tài liệu đã được tải lên thành công!');
+      // Reset form
       setUploadFile(null);
       setTitle('');
-      setSummary('');
+      setDocPurpose('');
+      setDocType('');
+      setDocModules('');
+      setDocFunctions('');
+      setDocFunctionDetails('');
       setUploadProgress(0);
       fetchDocuments();
     } catch (error) {
@@ -115,7 +147,6 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
 
   const handleLogout = async () => {
     try {
-      // Gọi logout endpoint
       await axios.post(`${API_URL}/auth/admin/logout`, {}, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
@@ -125,8 +156,93 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      // Luôn logout ở client side dù gọi endpoint có lỗi hay không
       onLogout();
+    }
+  };
+
+  // Hàm parse summary từ cấu trúc có sẵn
+  const parseSummary = (summary) => {
+    if (!summary) return {};
+    
+    const parts = summary.split(' | ');
+    const result = {};
+    
+    parts.forEach(part => {
+      if (part.includes('Tài liệu này nói về gì:')) {
+        result.docType = part.replace('Tài liệu này nói về gì:', '').trim();
+      } else if (part.includes('Mục đích tài liệu:')) {
+        result.docPurpose = part.replace('Mục đích tài liệu:', '').trim();
+      } else if (part.includes('Module/Phân hệ chính:')) {
+        result.docModules = part.replace('Module/Phân hệ chính:', '').trim();
+      } else if (part.includes('Các chức năng chính:')) {
+        result.docFunctions = part.replace('Các chức năng chính:', '').trim();
+      } else if (part.includes('Chi tiết chức năng:')) {
+        result.docFunctionDetails = part.replace('Chi tiết chức năng:', '').trim();
+      }
+    });
+    
+    return result;
+  };
+
+  // Mở modal cập nhật
+  const handleOpenEditModal = (doc) => {
+    setEditingDoc(doc);
+    const parsed = parseSummary(doc.summary);
+    setEditDocType(parsed.docType || '');
+    setEditDocPurpose(parsed.docPurpose || '');
+    setEditDocModules(parsed.docModules || '');
+    setEditDocFunctions(parsed.docFunctions || '');
+    setEditDocFunctionDetails(parsed.docFunctionDetails || '');
+    setIsEditModalOpen(true);
+  };
+
+  // Đóng modal cập nhật
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setEditingDoc(null);
+    setEditDocType('');
+    setEditDocPurpose('');
+    setEditDocModules('');
+    setEditDocFunctions('');
+    setEditDocFunctionDetails('');
+  };
+
+  // Xử lý cập nhật summary
+  const handleUpdateSummary = async (e) => {
+    e.preventDefault();
+    
+    setIsUpdating(true);
+    
+    // Kết hợp các trường thành summary có cấu trúc
+    const summaryParts = [];
+    if (editDocType) summaryParts.push(`Tài liệu này nói về gì: ${editDocType}`);
+    if (editDocPurpose) summaryParts.push(`Mục đích tài liệu: ${editDocPurpose}`);
+    if (editDocModules) summaryParts.push(`Module/Phân hệ chính: ${editDocModules}`);
+    if (editDocFunctions) summaryParts.push(`Các chức năng chính: ${editDocFunctions}`);
+    if (editDocFunctionDetails) summaryParts.push(`Chi tiết chức năng: ${editDocFunctionDetails}`);
+    
+    const combinedSummary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Không có mô tả';
+
+    try {
+      await axios.put(
+        `${API_URL}/documents/${editingDoc.id}`,
+        { summary: combinedSummary },
+        {
+          headers: {
+            'Authorization': `Bearer ${authToken}`,
+            'ngrok-skip-browser-warning': 'true',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      showMessage('success', 'Cập nhật tài liệu thành công!');
+      handleCloseEditModal();
+      fetchDocuments();
+    } catch (error) {
+      showMessage('error', error.response?.data?.detail || 'Lỗi khi cập nhật tài liệu');
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -195,7 +311,7 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="VD: Hướng dẫn sử dụng sản phẩm"
+                  placeholder="VD: Hướng dẫn module Quản lý Kho"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
                   disabled={isUploading}
                   required
@@ -217,18 +333,77 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Mô Tả (Tùy chọn)
-              </label>
-              <textarea
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                placeholder="Nhập mô tả ngắn về tài liệu này..."
-                rows="3"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-                disabled={isUploading}
-              ></textarea>
+            <div className="space-y-4 border-t pt-4 mt-4">
+              <h3 className="text-md font-semibold text-gray-800">Thông Tin Mô Tả (Giúp Chatbot hiểu rõ hơn)</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  1. Tài liệu này nói về gì?
+                </label>
+                <input
+                  type="text"
+                  value={docType}
+                  onChange={(e) => setDocType(e.target.value)}
+                  placeholder="Phân loại tài liệu. (VD: quy trình nghiệp vụ, tài liệu kỹ thuật, hướng dẫn sử dụng, chính sách công ty...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUploading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  2. Mục đích của tài liệu là gì ?
+                </label>
+                <input
+                  type="text"
+                  value={docPurpose}
+                  onChange={(e) => setDocPurpose(e.target.value)}
+                  placeholder="Tài liệu này dùng để làm gì? (VD: đào tạo người mới, hướng dẫn xử lý sự cố, quy định chính sách...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUploading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  3. Module/Phân hệ chính
+                </label>
+                <input
+                  type="text"
+                  value={docModules}
+                  onChange={(e) => setDocModules(e.target.value)}
+                  placeholder="Tài liệu này thuộc về module, phòng ban hoặc phân hệ nào của ERP? (VD: Kế toán, Kho, Bán hàng, Nhân sự...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUploading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  4. Các chức năng chính
+                </label>
+                <textarea
+                  value={docFunctions}
+                  onChange={(e) => setDocFunctions(e.target.value)}
+                  placeholder="Liệt kê các chức năng hoặc nghiệp vụ chính được đề cập. (VD: tạo đơn hàng, duyệt phiếu chi, chấm công, tính lương...)"
+                  rows="2"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUploading}
+                ></textarea>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  5. Chi tiết về các chức năng
+                </label>
+                <textarea
+                  value={docFunctionDetails}
+                  onChange={(e) => setDocFunctionDetails(e.target.value)}
+                  placeholder="Mô tả chi tiết hơn về cách các chức năng hoạt động hoặc các bước thực hiện. (VD: Để tạo đơn hàng, vào module Bán hàng -> Đơn hàng -> Tạo mới...)"
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUploading}
+                ></textarea>
+              </div>
             </div>
 
             {uploadProgress > 0 && uploadProgress < 100 && (
@@ -263,7 +438,7 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
         {/* Documents List */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Danh Sách Tài Liệu ({documents.length})</h2>
-
+          
           {isLoading ? (
             <div className="flex justify-center items-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -294,6 +469,13 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
                       <td className="px-4 py-3 text-center">
                         <div className="flex gap-2 justify-center">
                           <button
+                            onClick={() => handleOpenEditModal(doc)}
+                            className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg inline-flex items-center gap-2 transition"
+                          >
+                            <Edit className="w-4 h-4" />
+                            Cập nhật
+                          </button>
+                          <button
                             onClick={() => handleDelete(doc.id)}
                             disabled={deletingDocId === doc.id}
                             className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg inline-flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
@@ -315,6 +497,129 @@ export default function AdminDashboard({ onBack, onLogout, authToken }) {
           )}
         </div>
       </div>
+
+      {/* Modal Cập Nhật */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex justify-between items-center">
+              <h2 className="text-2xl font-bold text-gray-800">Cập Nhật Mô Tả Tài Liệu</h2>
+              <button
+                onClick={handleCloseEditModal}
+                className="text-gray-500 hover:text-gray-700 transition"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateSummary} className="p-6 space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <p className="text-sm text-blue-800">
+                  <strong>Tài liệu:</strong> {editingDoc?.name}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  1. Tài liệu này nói về gì?
+                </label>
+                <input
+                  type="text"
+                  value={editDocType}
+                  onChange={(e) => setEditDocType(e.target.value)}
+                  placeholder="Phân loại tài liệu. (VD: quy trình nghiệp vụ, tài liệu kỹ thuật, hướng dẫn sử dụng...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUpdating}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  2. Mục đích của tài liệu là gì?
+                </label>
+                <input
+                  type="text"
+                  value={editDocPurpose}
+                  onChange={(e) => setEditDocPurpose(e.target.value)}
+                  placeholder="Tài liệu này dùng để làm gì? (VD: đào tạo người mới, hướng dẫn xử lý sự cố...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUpdating}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  3. Module/Phân hệ chính
+                </label>
+                <input
+                  type="text"
+                  value={editDocModules}
+                  onChange={(e) => setEditDocModules(e.target.value)}
+                  placeholder="Tài liệu này thuộc về module nào? (VD: Kế toán, Kho, Bán hàng...)"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUpdating}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  4. Các chức năng chính
+                </label>
+                <textarea
+                  value={editDocFunctions}
+                  onChange={(e) => setEditDocFunctions(e.target.value)}
+                  placeholder="Liệt kê các chức năng hoặc nghiệp vụ chính được đề cập..."
+                  rows="2"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUpdating}
+                ></textarea>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  5. Chi tiết về các chức năng
+                </label>
+                <textarea
+                  value={editDocFunctionDetails}
+                  onChange={(e) => setEditDocFunctionDetails(e.target.value)}
+                  placeholder="Mô tả chi tiết hơn về cách các chức năng hoạt động..."
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                  disabled={isUpdating}
+                ></textarea>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="submit"
+                  disabled={isUpdating}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isUpdating ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Đang cập nhật...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5" />
+                      Cập Nhật
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseEditModal}
+                  disabled={isUpdating}
+                  className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 font-semibold py-2 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Hủy
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
